@@ -261,6 +261,14 @@ void StoneEngine::run()
 		glClear(GL_COLOR_BUFFER_BIT);
 		update();
 		glfwPollEvents();
+		// Wayland cannot position a top-level window.  Let the compositor map and
+		// place one windowed frame before entering fullscreen so it has a normal
+		// position to restore when F11 later leaves fullscreen.
+		if (_deferInitialFullscreen)
+		{
+			_deferInitialFullscreen = false;
+			setFullscreen(true);
+		}
 	}
 	{
 		std::lock_guard<std::mutex> g(_isRunningMutex);
@@ -2909,15 +2917,6 @@ void StoneEngine::reshapeAction(int width, int height)
 
 	windowHeight = height;
 	windowWidth = width;
-	if (!_isFullscreen)
-	{
-		_windowedW = width;
-		_windowedH = height;
-		int px, py;
-		glfwGetWindowPos(_window, &px, &py);
-		_windowedX = px;
-		_windowedY = py;
-	}
 	resetFrameBuffers();
 	// On actual window resize, previous-frame depth is invalid for occlusion
 	_occlDisableFrames = std::max(_occlDisableFrames, 3);
@@ -3088,19 +3087,33 @@ int StoneEngine::initGLFW()
 	glfwWindowHint(GLFW_DEPTH_BITS, 32); // Request 32-bit depth buffer
 	// glfwWindowHint(GLFW_SAMPLES, 4);
 
-	// Always start in true fullscreen on the primary monitor
+	// On Wayland, a surface created directly in fullscreen has no previous
+	// windowed placement for the compositor to restore.  Create it windowed and
+	// enter fullscreen after its first mapped frame instead.
 	GLFWmonitor *monitor = glfwGetPrimaryMonitor();
 	const GLFWvidmode *mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+	const bool deferFullscreen = glfwGetPlatform() == GLFW_PLATFORM_WAYLAND;
 	if (mode)
 	{
-		windowWidth = mode->width;
-		windowHeight = mode->height;
-		// Match the monitor's color depth and refresh rate for smooth fullscreen
-		glfwWindowHint(GLFW_RED_BITS, mode->redBits);
-		glfwWindowHint(GLFW_GREEN_BITS, mode->greenBits);
-		glfwWindowHint(GLFW_BLUE_BITS, mode->blueBits);
-		glfwWindowHint(GLFW_REFRESH_RATE, mode->refreshRate);
-		_window = glfwCreateWindow(windowWidth, windowHeight, "Not_ft_minecraft | FPS: 0", monitor, NULL);
+		if (deferFullscreen)
+		{
+			windowWidth = std::min(WINDOWED_FIXED_W, mode->width);
+			windowHeight = std::min(WINDOWED_FIXED_H, mode->height);
+			_window = glfwCreateWindow(windowWidth, windowHeight,
+				"Not_ft_minecraft | FPS: 0", nullptr, nullptr);
+		}
+		else
+		{
+			windowWidth = mode->width;
+			windowHeight = mode->height;
+			// Match the monitor's color depth and refresh rate for smooth fullscreen
+			glfwWindowHint(GLFW_RED_BITS, mode->redBits);
+			glfwWindowHint(GLFW_GREEN_BITS, mode->greenBits);
+			glfwWindowHint(GLFW_BLUE_BITS, mode->blueBits);
+			glfwWindowHint(GLFW_REFRESH_RATE, mode->refreshRate);
+			_window = glfwCreateWindow(windowWidth, windowHeight,
+				"Not_ft_minecraft | FPS: 0", monitor, nullptr);
+		}
 	}
 	else
 	{
@@ -3156,6 +3169,7 @@ int StoneEngine::initGLFW()
 				glfwSetInputMode(_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 	}
 	_isFullscreen = (glfwGetWindowMonitor(_window) != nullptr);
+	_deferInitialFullscreen = deferFullscreen && !_isFullscreen;
 	return 1;
 }
 
@@ -3180,6 +3194,7 @@ bool StoneEngine::initGLEW()
 				  << std::endl;
 		return false;
 	}
+	std::cout << "OpenGL renderer: " << glGetString(GL_RENDERER) << std::endl;
 	// Reduce seams when sampling across cube faces, especially with mipmaps
 	if (GLEW_ARB_seamless_cube_map || GLEW_VERSION_3_2)
 	{
@@ -3197,34 +3212,37 @@ void StoneEngine::setFullscreen(bool enable)
 	const GLFWvidmode *mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
 	if (enable && monitor && mode)
 	{
-		// Going fullscreen: remember current windowed placement
-		int x, y, w, h;
-		glfwGetWindowPos(_window, &x, &y);
-		glfwGetWindowSize(_window, &w, &h);
-		_windowedX = x;
-		_windowedY = y;
-		_windowedW = w;
-		_windowedH = h;
-
 		glfwSetWindowMonitor(_window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
 		_isFullscreen = true;
 	}
 	else
 	{
-		// Going windowed: use fixed size
+		// Center the fixed-size window in the monitor's usable area.  Using the
+		// work area also keeps the title bar clear of desktop panels.
 		int w = WINDOWED_FIXED_W;
 		int h = WINDOWED_FIXED_H;
-		int x = _windowedX, y = _windowedY;
+		int x = 0;
+		int y = 0;
 		if (mode && monitor)
 		{
-			// Center if unknown position
-			if (x <= 0 && y <= 0)
+			int workX = 0;
+			int workY = 0;
+			int workW = 0;
+			int workH = 0;
+
+			glfwGetMonitorWorkarea(monitor, &workX, &workY, &workW, &workH);
+			if (workW <= 0 || workH <= 0)
 			{
-				x = (mode->width - w) / 2;
-				y = (mode->height - h) / 2;
+				glfwGetMonitorPos(monitor, &workX, &workY);
+				workW = mode->width;
+				workH = mode->height;
 			}
+			w = std::min(w, workW);
+			h = std::min(h, workH);
+			x = workX + (workW - w) / 2;
+			y = workY + (workH - h) / 2;
 		}
-		// Ensure window decorations and non-maximized state when leaving fullscreen
+
 		glfwSetWindowMonitor(_window, nullptr, x, y, w, h, 0);
 		glfwSetWindowAttrib(_window, GLFW_DECORATED, GLFW_TRUE);
 		glfwRestoreWindow(_window);
