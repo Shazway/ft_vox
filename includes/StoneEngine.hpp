@@ -39,15 +39,16 @@ class StoneEngine {
 		} ShaderType;
 	private:
 		// Display
-		GLFWwindow* _window;
-		GLint _maxSamples;
-		GLuint shaderProgram;
-		GLuint sunProgram;
+		GLFWwindow* _window = nullptr;
+		bool _glReady = false;
+		GLint _maxSamples = 0;
+		GLuint shaderProgram = 0;
+		GLuint sunProgram = 0;
 		Camera camera;
 
-		GLuint sunShaderProgram;
-		GLuint sunVAO;
-		GLuint sunVBO;
+		GLuint sunShaderProgram = 0;
+		GLuint sunVAO = 0;
+		GLuint sunVBO = 0;
 
 		// Shadow mapping (single shadow map)
 		GLuint shadowShaderProgram = 0;	// depth-only terrain pass
@@ -65,8 +66,8 @@ class StoneEngine {
 		Skybox _skybox;
 		bool _hasSkybox = false;
 
-		GLuint waterShaderProgram;
-		GLuint waterNormalMap;
+		GLuint waterShaderProgram = 0;
+		GLuint waterNormalMap = 0;
 
 		// Masked alpha pass (leaves)
 		GLuint alphaShaderProgram = 0;
@@ -92,10 +93,10 @@ class StoneEngine {
 
 		std::map<ShaderType, PostProcessShader> postProcessShaders;
 		
-		FBODatas msaaFBO;
-		FBODatas readFBO;
-		FBODatas writeFBO;
-		FBODatas tmpFBO;
+		FBODatas msaaFBO{};
+		FBODatas readFBO{};
+		FBODatas writeFBO{};
+		FBODatas tmpFBO{};
 
 		int windowHeight;
 		int windowWidth;
@@ -215,6 +216,7 @@ class StoneEngine {
 	public:
 		StoneEngine(int seed, ThreadPool &pool);
 		~StoneEngine();
+		bool isInitialized() const;
 		void run();
 	private:
 		// Event hook actions
@@ -235,7 +237,7 @@ class StoneEngine {
 
 		// Init methods
 		void	initData();
-		void	initGLEW();
+		bool	initGLEW();
 		int		initGLFW();
 		void	initTextures();
 		void	initRenderShaders();

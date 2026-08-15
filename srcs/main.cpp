@@ -24,6 +24,11 @@ int main(int argc, char **argv)
 	}
 	ThreadPool pool(std::thread::hardware_concurrency());
 	StoneEngine stone(seed, pool);
+	if (!stone.isInitialized())
+	{
+		pool.joinThreads();
+		return EXIT_FAILURE;
+	}
 	stone.run();
 	// Ensure all worker threads are stopped before tearing down world/GL
 	pool.joinThreads();

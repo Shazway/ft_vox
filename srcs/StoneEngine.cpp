@@ -108,8 +108,15 @@ StoneEngine::StoneEngine(int seed, ThreadPool &pool) : camera(),
 													   _player(camera, _chunkMgr)
 {
 	initData();
-	initGLFW();
-	initGLEW();
+	if (!initGLFW() || !initGLEW())
+		return;
+
+	// OpenGL queries are only valid after a context exists and GLEW has loaded
+	// the entry points.
+	glGetIntegerv(GL_MAX_SAMPLES, &_maxSamples);
+	if (SCHOOL_SAMPLES)
+		_maxSamples = 8;
+
 	initTextures();
 	initRenderShaders();
 	initShadowMapping();
@@ -118,6 +125,7 @@ StoneEngine::StoneEngine(int seed, ThreadPool &pool) : camera(),
 	initFboShaders();
 	reshapeAction(windowWidth, windowHeight);
 	_chunkMgr.initGLBuffer();
+	_glReady = true;
 
 	// Show a splash while the first mesh arrives
 	_splashDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(LOADING_SPLASH_MS);
@@ -125,8 +133,18 @@ StoneEngine::StoneEngine(int seed, ThreadPool &pool) : camera(),
 
 StoneEngine::~StoneEngine()
 {
+	// A failed context/GLEW initialization owns no GL objects.  In particular,
+	// never call a GLEW entry point after glewInit() failed: it may be null.
+	if (!_glReady)
+	{
+		if (_window)
+			glfwDestroyWindow(_window);
+		glfwTerminate();
+		return;
+	}
+
 	// Ensure the GL context is current during teardown
-	if (_window) glfwMakeContextCurrent(_window);
+	glfwMakeContextCurrent(_window);
 	// Drain any in-flight GPU work before deleting GL objects
 	glFinish();
 	// Ensure _chunkMgr GL resources are freed before destroying the context
@@ -223,6 +241,11 @@ StoneEngine::~StoneEngine()
 	glfwTerminate();
 }
 
+bool StoneEngine::isInitialized() const
+{
+	return _glReady;
+}
+
 void StoneEngine::run()
 {
 	_isRunning = true;
@@ -269,13 +292,6 @@ void StoneEngine::initData()
 	_timeAccelerating = false;
 	_shadowUpdateDivider = 20;
 	_shadowUpdateCounter = 0;
-
-	// Gets the max MSAA (anti aliasing) samples
-	_maxSamples = 0;
-	glGetIntegerv(GL_MAX_SAMPLES, &_maxSamples);
-
-	if (SCHOOL_SAMPLES)
-		_maxSamples = 8;
 
 	// Window size
 	windowHeight = W_HEIGHT;
@@ -3060,6 +3076,12 @@ void StoneEngine::scrollCallback(GLFWwindow *window, double xoffset, double yoff
 
 int StoneEngine::initGLFW()
 {
+	// Every shader in this project declares GLSL 4.60 and the renderer uses
+	// OpenGL 4.6 entry points (for example indirect-count drawing).  Requesting
+	// that version makes an unsuitable fallback device fail at window creation
+	// instead of much later through a missing function pointer.
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
 	glfwWindowHint(GLFW_DEPTH_BITS, 32); // Request 32-bit depth buffer
 	// glfwWindowHint(GLFW_SAMPLES, 4);
 
@@ -3134,19 +3156,33 @@ int StoneEngine::initGLFW()
 	return 1;
 }
 
-void StoneEngine::initGLEW()
+bool StoneEngine::initGLEW()
 {
+	glewExperimental = GL_TRUE;
 	GLenum err = glewInit();
-	if (err != GLEW_OK)
+	// GLEW reports NO_GLX_DISPLAY when GLFW uses an EGL/Wayland context.  Its
+	// OpenGL entry points are still initialized in that case; only GLX support
+	// is unavailable, which this program does not use.
+	if (err != GLEW_OK && err != GLEW_ERROR_NO_GLX_DISPLAY)
 	{
-		std::cerr << "GLEW initialization failed: " << glewGetErrorString(err) << std::endl;
-		return;
+		std::cerr << "GLEW initialization failed (" << err << "): "
+				  << glewGetErrorString(err) << std::endl;
+		return false;
+	}
+	if (!GLEW_VERSION_4_6)
+	{
+		const GLubyte *version = glGetString(GL_VERSION);
+		std::cerr << "OpenGL 4.6 is required; selected device provides "
+				  << (version ? reinterpret_cast<const char *>(version) : "an unknown version")
+				  << std::endl;
+		return false;
 	}
 	// Reduce seams when sampling across cube faces, especially with mipmaps
 	if (GLEW_ARB_seamless_cube_map || GLEW_VERSION_3_2)
 	{
 		glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 	}
+	return true;
 }
 
 void StoneEngine::setFullscreen(bool enable)

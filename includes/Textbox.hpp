@@ -91,13 +91,13 @@ private:
 	};
 
 	std::vector<Line> lines;
-	GLFWwindow* window;
-	int positionX, positionY, width, height;
+	GLFWwindow* window = nullptr;
+	int positionX = 0, positionY = 0, width = 0, height = 0;
 	stbtt_bakedchar cdata[96];
 	unsigned char ttfBuffer[1 << 20];
 	unsigned char bitmap[512 * 512 * 4];
-	GLuint fontTexture;
-	bool fontLoaded;
+	GLuint fontTexture = 0;
+	bool fontLoaded = false;
 	// Use list to keep pointers to stored strings stable
 	std::list<std::string> _ownedStrings;
 
