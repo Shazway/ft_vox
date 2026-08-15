@@ -130,7 +130,7 @@ class StoneEngine {
 		bool mouseCaptureToggle;
 		bool showDebugInfo;
 		bool showHelp;
-		bool showUI;
+		bool showUi;
 		bool showLight;
 		bool pauseTime = false;
 		bool gravity;

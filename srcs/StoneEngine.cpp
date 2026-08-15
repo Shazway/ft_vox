@@ -279,7 +279,7 @@ void StoneEngine::initData()
 	mouseCaptureToggle	= CAPTURE_MOUSE;
 	showDebugInfo		= SHOW_DEBUG;
 	showHelp            = false;
-	showUI				= SHOW_UI;
+	showUi		= SHOW_UI;
 	showLight			= SHOW_LIGHTING;
 	selectedBlockDebug	= air;
 	gravity 			= GRAVITY;
@@ -854,7 +854,7 @@ void StoneEngine::updateHelpStatusText()
 	_hGravity = onoff(gravity);
 	_hGeneration = onoff(updateChunk);
 	_hSprinting = onoff(_player.isSprinting());
-	_hUI = onoff(showUI);
+	_hUI = onoff(showUi);
 	_hLighting = onoff(showLight);
 	_hMouseCapture = onoff(mouseCaptureToggle);
 	_hDebug = onoff(showDebugInfo);
@@ -1807,7 +1807,7 @@ void StoneEngine::display()
 	displaySun(writeFBO);
 	blitColor(writeFBO, readFBO);
 
-	if (showUI)
+	if (showUi)
 	{
 		postProcessCrosshair();
 		blitColor(writeFBO, readFBO);
@@ -2967,7 +2967,7 @@ void StoneEngine::keyAction(int key, int scancode, int action, int mods)
 		setFullscreen(!_isFullscreen);
 	}
 	if (action == GLFW_PRESS && key == GLFW_KEY_F1)
-		showUI = !showUI;
+		showUi = !showUi;
 	if (action == GLFW_PRESS && key == GLFW_KEY_L)
 		showLight = !showLight;
 	if (action == GLFW_PRESS && key == GLFW_KEY_F3)
