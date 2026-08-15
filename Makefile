@@ -1,13 +1,10 @@
 NAME		=	ft_vox
-DEBUG_NAME	=	ft_voxDebug
 
 LDFLAGS =	-lGL -lGLU -Llib64 -lGLEW -lglfw
 
-CFLAGS	=	-Wall -Wextra -Werror -O3 -std=c++17 -g3 #-fsanitize=address
-DEBUG_CFLAGS	=	-DNDEBUG -Wall -Wextra -Werror -g3
+CFLAGS	=	-O3 -std=c++17 -g3 #-fsanitize=address
 
 OBJ_PATH		=	obj/
-DEBUG_OBJ_PATH		=	debug_obj/
 
 CC			=	g++
 SRC_PATH	=	srcs/
@@ -19,7 +16,6 @@ PKG_LIBS	:= $(shell pkg-config --libs glew glfw3 2>/dev/null)
 
 # Append detected flags (no-op if pkg-config not available)
 CFLAGS		+= $(PKG_CFLAGS)
-DEBUG_CFLAGS	+= $(PKG_CFLAGS)
 LDFLAGS		+= $(PKG_LIBS)
 
 # Tools for fetching dependencies
@@ -63,7 +59,6 @@ SRC_NAME	=	stb_truetype.cpp		\
 
 OBJ_NAME	=	$(SRC_NAME:.cpp=.o)
 OBJ		=	$(addprefix $(OBJ_PATH), $(OBJ_NAME))
-DEBUG_OBJ	=	$(addprefix $(DEBUG_OBJ_PATH), $(OBJ_NAME))
 
 #----------colors---------#
 BLACK		=	\033[1;30m
@@ -124,35 +119,19 @@ $(OBJ_PATH)%.o: $(SRC_PATH)%.cpp | deps
 
 -include $(OBJ:%.o=%.d)
 
-debug: $(DEBUG_NAME)
-
-$(DEBUG_NAME): $(DEBUG_OBJ)
-	@echo "$(RED)=====>Compiling ft_vox DEBUG<===== $(WHITE)"
-	$(CC) $(DEBUG_CFLAGS) $(INCLUDES) $(DEBUG_OBJ) -o $(DEBUG_NAME) $(LDFLAGS)
-	@echo "$(GREEN)Done ! ✅ $(EOC)"
-
-$(DEBUG_OBJ_PATH)%.o: $(SRC_PATH)%.cpp | deps
-	mkdir -p $(@D)
-	$(CC) $(DEBUG_CFLAGS) $(INCLUDES) -MMD -c $< -o $@
-
--include $(DEBUG_OBJ:%.o=%.d)
-
 clean:
 	@echo "$(CYAN)♻  Cleaning obj files ♻ $(WHITE)"
 	rm -rf $(OBJ_PATH)
-	rm -rf $(DEBUG_OBJ_PATH)
 	@echo "$(GREEN)Done !✅ $(EOC)"
 
 fclean: clean
 		@echo "$(CYAN)♻  Cleaning executable ♻ $(WHITE)"
 		rm -rf $(NAME)
-		rm -rf $(DEBUG_NAME)
 		@echo "$(CYAN)♻  Removing fetched headers/libs ♻ $(WHITE)"
 		rm -rf $(STB_IMAGE) $(STB_TRUETYPE) $(GLEW_HDR) $(GLEW_LIB) third_party
 		rm -rf $(GLM_DIR)
 		@echo "$(GREEN)Done !✅ $(EOC)"
 
 re: fclean all
-re_debug: fclean debug
 
-.PHONY: all debug clean fclean re re_debug
+.PHONY: all clean fclean re
