@@ -3082,6 +3082,9 @@ int StoneEngine::initGLFW()
 	// instead of much later through a missing function pointer.
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
+	// Textbox still renders through the fixed-function pipeline (glBegin,
+	// glMatrixMode, glOrtho), which is unavailable in a core profile.
+	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
 	glfwWindowHint(GLFW_DEPTH_BITS, 32); // Request 32-bit depth buffer
 	// glfwWindowHint(GLFW_SAMPLES, 4);
 
