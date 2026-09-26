@@ -46,15 +46,17 @@ ChunkLoader::~ChunkLoader()
 		std::lock_guard<std::mutex> lk(_sharedDrawDataMutex);
 		while (_solidStagedDataQueue.size())
 		{
-			auto &tmp = _solidStagedDataQueue.front();
+			auto *tmp = _solidStagedDataQueue.front();
 			_solidStagedDataQueue.pop();
-			delete tmp;
+			if (tmp)	
+				delete tmp;
 		}
 		while (_transparentStagedDataQueue.size())
 		{
-			auto &tmp = _transparentStagedDataQueue.front();
+			auto *tmp = _transparentStagedDataQueue.front();
 			_transparentStagedDataQueue.pop();
-			delete tmp;
+			if (tmp)
+				delete tmp;
 		}
 	}
 }

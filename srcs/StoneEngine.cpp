@@ -109,8 +109,14 @@ StoneEngine::StoneEngine(int seed, ThreadPool &pool) : camera(),
 													   _player(camera, _chunkMgr)
 {
 	initData();
-	initGLFW();
-	initGLEW();
+	if (!initGLFW() || !initGLEW())
+		return;
+
+	// OpenGL queries are only valid after a context exists and GLEW has loaded.
+	glGetIntegerv(GL_MAX_SAMPLES, &_maxSamples);
+	if (SCHOOL_SAMPLES)
+		_maxSamples = std::min(_maxSamples, 8);
+
 	initTextures();
 	initRenderShaders();
 	initShadowMapping();
@@ -119,6 +125,7 @@ StoneEngine::StoneEngine(int seed, ThreadPool &pool) : camera(),
 	initFboShaders();
 	reshapeAction(windowWidth, windowHeight);
 	_chunkMgr.initGLBuffer();
+	_glReady = true;
 
 	// Show a splash while the first mesh arrives
 	_splashDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(LOADING_SPLASH_MS);
@@ -126,6 +133,20 @@ StoneEngine::StoneEngine(int seed, ThreadPool &pool) : camera(),
 
 StoneEngine::~StoneEngine()
 {
+	// No OpenGL entry point may be used when context or GLEW initialization
+	// failed.  The window, if one was created, is still safe to destroy.
+	if (!_glReady)
+	{
+		if (_window)
+		{
+			_mouseCapture.release(_window);
+			glfwDestroyWindow(_window);
+			_window = nullptr;
+		}
+		glfwTerminate();
+		return;
+	}
+
 	if (_window) _mouseCapture.release(_window);
 	// Ensure the GL context is current during teardown
 	if (_window) glfwMakeContextCurrent(_window);
@@ -225,9 +246,15 @@ StoneEngine::~StoneEngine()
 	glfwTerminate();
 }
 
+bool StoneEngine::isInitialized() const
+{
+	return _glReady;
+}
+
 void StoneEngine::run()
 {
 	_isRunning = true;
+	bool hasPresentedFrame = false;
 
 	// Set spawn point chunk and player pos
 	_chunkMgr.initSpawn();
@@ -240,14 +267,19 @@ void StoneEngine::run()
 		glfwPollEvents();
 		if (glfwWindowShouldClose(_window))
 			break;
-		if (!glfwGetWindowAttrib(_window, GLFW_FOCUSED)
-			|| glfwGetWindowAttrib(_window, GLFW_ICONIFIED))
+		// A native Wayland window cannot receive focus until its first rendered
+		// buffer has been committed.  Always present that first frame before
+		// throttling an unfocused or iconified window.
+		if (hasPresentedFrame
+			&& (!glfwGetWindowAttrib(_window, GLFW_FOCUSED)
+				|| glfwGetWindowAttrib(_window, GLFW_ICONIFIED)))
 		{
 			glfwWaitEventsTimeout(0.05);
 			continue;
 		}
 		glClear(GL_COLOR_BUFFER_BIT);
 		update();
+		hasPresentedFrame = true;
 	}
 	{
 		std::lock_guard<std::mutex> g(_isRunningMutex);
@@ -280,12 +312,8 @@ void StoneEngine::initData()
 	_shadowUpdateDivider = 20;
 	_shadowUpdateCounter = 0;
 
-	// Gets the max MSAA (anti aliasing) samples
+	// Queried after context/GLEW initialization in the constructor.
 	_maxSamples = 0;
-	glGetIntegerv(GL_MAX_SAMPLES, &_maxSamples);
-
-	if (SCHOOL_SAMPLES)
-		_maxSamples = 8;
 
 	// Window size
 	windowHeight = W_HEIGHT;
@@ -2917,10 +2945,14 @@ void StoneEngine::reshapeAction(int width, int height)
 	{
 		_windowedW = width;
 		_windowedH = height;
-		int px, py;
-		glfwGetWindowPos(_window, &px, &py);
-		_windowedX = px;
-		_windowedY = py;
+		// Wayland intentionally exposes no global window coordinates.
+		if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND)
+		{
+			int px, py;
+			glfwGetWindowPos(_window, &px, &py);
+			_windowedX = px;
+			_windowedY = py;
+		}
 	}
 	resetFrameBuffers();
 	// On actual window resize, previous-frame depth is invalid for occlusion
@@ -3126,8 +3158,14 @@ void StoneEngine::scrollCallback(GLFWwindow *window, double xoffset, double yoff
 		engine->scrollAction(yoffset);
 }
 
-int StoneEngine::initGLFW()
+bool StoneEngine::initGLFW()
 {
+	// The renderer uses GLSL 4.60 and OpenGL 4.6 entry points.  Textbox still
+	// uses fixed-function calls, so request a compatibility rather than core
+	// profile until that renderer is modernized.
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
+	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
 	glfwWindowHint(GLFW_DEPTH_BITS, 32); // Request 32-bit depth buffer
 	// glfwWindowHint(GLFW_SAMPLES, 4);
 
@@ -3153,9 +3191,8 @@ int StoneEngine::initGLFW()
 
 	if (!_window)
 	{
-		std::cerr << "Failed to create GLFW window" << std::endl;
-		glfwTerminate();
-		return 0;
+		std::cerr << "Failed to create an OpenGL 4.6 GLFW window" << std::endl;
+		return false;
 	}
 
 	// Set window icon (fun): load PNG and pass to GLFW
@@ -3163,7 +3200,8 @@ int StoneEngine::initGLFW()
 	{
 		int iw = 0, ih = 0, ic = 0;
 		stbi_uc* pixels = stbi_load("textures/mcicon.png", &iw, &ih, &ic, 4);
-		if (pixels && iw > 0 && ih > 0)
+		if (pixels && iw > 0 && ih > 0
+			&& glfwGetPlatform() != GLFW_PLATFORM_WAYLAND)
 		{
 			GLFWimage img;
 			img.width = iw;
@@ -3200,22 +3238,43 @@ int StoneEngine::initGLFW()
 		_mouseCapture.apply(_window, mouseCaptureToggle);
 	}
 	_isFullscreen = (glfwGetWindowMonitor(_window) != nullptr);
-	return 1;
+	return true;
 }
 
-void StoneEngine::initGLEW()
+bool StoneEngine::initGLEW()
 {
+	glewExperimental = GL_TRUE;
 	GLenum err = glewInit();
-	if (err != GLEW_OK)
+	// GLFW uses EGL on native Wayland.  GLEW 2.2 initializes the OpenGL entry
+	// points successfully there but returns NO_GLX_DISPLAY because GLX is an
+	// X11-only API that is absent from this context.
+	if (err != GLEW_OK && err != GLEW_ERROR_NO_GLX_DISPLAY)
 	{
-		std::cerr << "GLEW initialization failed: " << glewGetErrorString(err) << std::endl;
-		return;
+		std::cerr << "GLEW initialization failed (" << err << "): "
+			<< glewGetErrorString(err) << std::endl;
+		return false;
 	}
+
+	const GLubyte *version = glGetString(GL_VERSION);
+	const GLubyte *vendor = glGetString(GL_VENDOR);
+	const GLubyte *renderer = glGetString(GL_RENDERER);
+	if (!version || !vendor || !renderer || !GLEW_VERSION_4_6)
+	{
+		std::cerr << "OpenGL 4.6 initialization failed; context reports "
+			<< (version ? reinterpret_cast<const char *>(version) : "no version")
+			<< std::endl;
+		return false;
+	}
+
+	std::cout << "OpenGL vendor: " << vendor << std::endl;
+	std::cout << "OpenGL renderer: " << renderer << std::endl;
+	std::cout << "OpenGL version: " << version << std::endl;
 	// Reduce seams when sampling across cube faces, especially with mipmaps
 	if (GLEW_ARB_seamless_cube_map || GLEW_VERSION_3_2)
 	{
 		glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 	}
+	return true;
 }
 
 void StoneEngine::setFullscreen(bool enable)
@@ -3228,13 +3287,12 @@ void StoneEngine::setFullscreen(bool enable)
 	if (enable && monitor && mode)
 	{
 		// Going fullscreen: remember current windowed placement
-		int x, y, w, h;
-		glfwGetWindowPos(_window, &x, &y);
+		int w, h;
 		glfwGetWindowSize(_window, &w, &h);
-		_windowedX = x;
-		_windowedY = y;
 		_windowedW = w;
 		_windowedH = h;
+		if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND)
+			glfwGetWindowPos(_window, &_windowedX, &_windowedY);
 
 		glfwSetWindowMonitor(_window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
 		_isFullscreen = true;
