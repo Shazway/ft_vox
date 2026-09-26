@@ -28,11 +28,11 @@ private:
 	// GL Unsigned ints
 	/* Vertex array objects and vertex array buffers
 		for solid and transparent rendering */
-	GLuint									_vao;
-	GLuint									_vbo;
-	GLuint									_transparentVao;
-	GLuint									_transparentIndirectBuffer;
-	GLuint									_indirectBuffer;
+	GLuint									_vao = 0;
+	GLuint									_vbo = 0;
+	GLuint									_transparentVao = 0;
+	GLuint									_transparentIndirectBuffer = 0;
+	GLuint									_indirectBuffer = 0;
 
 	// SSBOs
 	GLuint									_solidPosSSBO = 0;      // binding=3 for SOLID

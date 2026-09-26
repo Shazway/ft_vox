@@ -102,10 +102,7 @@ class StoneEngine {
 		int windowHeight;
 		int windowWidth;
 		bool _isFullscreen = true;
-		int  _windowedX = 100;
-		int  _windowedY = 100;
-		int  _windowedW = W_WIDTH;
-		int  _windowedH = W_HEIGHT;
+		bool _deferInitialFullscreen = false;
 
 		// Loading screen
 		Textbox _loadingBox;
@@ -140,7 +137,7 @@ class StoneEngine {
 		bool mouseCaptureToggle;
 		bool showDebugInfo;
 		bool showHelp;
-		bool showUI;
+		bool showUi;
 		bool showLight;
 		bool pauseTime = false;
 		bool gravity;

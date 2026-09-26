@@ -22,7 +22,6 @@ On Ubuntu/WSL
  
 Build 
 - make          # optimized build → ft_vox 
-- make debug    # debug build → ft_voxDebug 
  
 Run 
 - ./ft_vox [seed] 

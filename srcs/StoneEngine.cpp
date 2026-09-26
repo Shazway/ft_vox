@@ -112,7 +112,8 @@ StoneEngine::StoneEngine(int seed, ThreadPool &pool) : camera(),
 	if (!initGLFW() || !initGLEW())
 		return;
 
-	// OpenGL queries are only valid after a context exists and GLEW has loaded.
+	// OpenGL queries are only valid after a context exists and GLEW has loaded
+	// the entry points.
 	glGetIntegerv(GL_MAX_SAMPLES, &_maxSamples);
 	if (SCHOOL_SAMPLES)
 		_maxSamples = std::min(_maxSamples, 8);
@@ -133,8 +134,8 @@ StoneEngine::StoneEngine(int seed, ThreadPool &pool) : camera(),
 
 StoneEngine::~StoneEngine()
 {
-	// No OpenGL entry point may be used when context or GLEW initialization
-	// failed.  The window, if one was created, is still safe to destroy.
+	// A failed context/GLEW initialization owns no GL objects.  In particular,
+	// never call a GLEW entry point after glewInit() failed: it may be null.
 	if (!_glReady)
 	{
 		if (_window)
@@ -147,9 +148,9 @@ StoneEngine::~StoneEngine()
 		return;
 	}
 
-	if (_window) _mouseCapture.release(_window);
+	_mouseCapture.release(_window);
 	// Ensure the GL context is current during teardown
-	if (_window) glfwMakeContextCurrent(_window);
+	glfwMakeContextCurrent(_window);
 	// Drain any in-flight GPU work before deleting GL objects
 	glFinish();
 	// Ensure _chunkMgr GL resources are freed before destroying the context
@@ -279,6 +280,14 @@ void StoneEngine::run()
 		}
 		glClear(GL_COLOR_BUFFER_BIT);
 		update();
+		// Wayland cannot position a top-level window.  Let the compositor map and
+		// place one windowed frame before entering fullscreen so it has a normal
+		// position to restore when F11 later leaves fullscreen.
+		if (_deferInitialFullscreen)
+		{
+			_deferInitialFullscreen = false;
+			setFullscreen(true);
+		}
 		hasPresentedFrame = true;
 	}
 	{
@@ -298,7 +307,7 @@ void StoneEngine::initData()
 	mouseCaptureToggle	= CAPTURE_MOUSE;
 	showDebugInfo		= SHOW_DEBUG;
 	showHelp            = false;
-	showUI				= SHOW_UI;
+	showUi		= SHOW_UI;
 	showLight			= SHOW_LIGHTING;
 	selectedBlockDebug	= air;
 	gravity 			= GRAVITY;
@@ -383,38 +392,6 @@ void StoneEngine::initTextures()
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-}
-
-glm::vec3 StoneEngine::computeSunPosition(int timeValue, const glm::vec3 &cameraPos)
-{
-	const float pi = 3.14159265f;
-	const float radius = 6000.0f;
-	const float dayStart = 42000.0f;		  // sunrise
-	const float dayLen = 86400.0f - dayStart; // 44400 (day duration)
-	const float nightLen = dayStart;		  // 42000 (night duration)
-
-	float t = static_cast<float>(timeValue);
-	float angle;
-	if (t < dayStart)
-	{
-		// Night: traverse pi..2pi across [0, dayStart)
-		float phase = glm::clamp(t / nightLen, 0.0f, 1.0f);
-		angle = pi + phase * pi;
-	}
-	else
-	{
-		// Day: traverse 0..pi across [dayStart, 86400]
-		float phase = glm::clamp((t - dayStart) / dayLen, 0.0f, 1.0f);
-		angle = phase * pi;
-	}
-
-	float x = radius * cos(angle);
-	float y = radius * sin(angle); // y>0 during day, y<0 during night
-	float z = 0.0f;
-
-	// Return a position in the sun direction at a fixed radius from the camera,
-	// used only for visual effects (sun sprite, god rays)
-	return cameraPos + glm::vec3(x, y, z);
 }
 
 glm::vec3 StoneEngine::computeSunDirection(int timeValue)
@@ -876,7 +853,7 @@ void StoneEngine::updateHelpStatusText()
 	_hGravity = onoff(gravity);
 	_hGeneration = onoff(updateChunk);
 	_hSprinting = onoff(_player.isSprinting());
-	_hUI = onoff(showUI);
+	_hUI = onoff(showUi);
 	_hLighting = onoff(showLight);
 	_hMouseCapture = onoff(mouseCaptureToggle);
 	_hDebug = onoff(showDebugInfo);
@@ -1829,7 +1806,7 @@ void StoneEngine::display()
 	displaySun(writeFBO);
 	blitColor(writeFBO, readFBO);
 
-	if (showUI)
+	if (showUi)
 	{
 		postProcessCrosshair();
 		blitColor(writeFBO, readFBO);
@@ -2941,19 +2918,6 @@ void StoneEngine::reshapeAction(int width, int height)
 
 	windowHeight = height;
 	windowWidth = width;
-	if (!_isFullscreen)
-	{
-		_windowedW = width;
-		_windowedH = height;
-		// Wayland intentionally exposes no global window coordinates.
-		if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND)
-		{
-			int px, py;
-			glfwGetWindowPos(_window, &px, &py);
-			_windowedX = px;
-			_windowedY = py;
-		}
-	}
 	resetFrameBuffers();
 	// On actual window resize, previous-frame depth is invalid for occlusion
 	_occlDisableFrames = std::max(_occlDisableFrames, 3);
@@ -3004,7 +2968,7 @@ void StoneEngine::keyAction(int key, int scancode, int action, int mods)
 		setFullscreen(!_isFullscreen);
 	}
 	if (action == GLFW_PRESS && key == GLFW_KEY_F1)
-		showUI = !showUI;
+		showUi = !showUi;
 	if (action == GLFW_PRESS && key == GLFW_KEY_L)
 		showLight = !showLight;
 	if (action == GLFW_PRESS && key == GLFW_KEY_F3)
@@ -3160,28 +3124,45 @@ void StoneEngine::scrollCallback(GLFWwindow *window, double xoffset, double yoff
 
 bool StoneEngine::initGLFW()
 {
-	// The renderer uses GLSL 4.60 and OpenGL 4.6 entry points.  Textbox still
-	// uses fixed-function calls, so request a compatibility rather than core
-	// profile until that renderer is modernized.
+	// Every shader in this project declares GLSL 4.60 and the renderer uses
+	// OpenGL 4.6 entry points (for example indirect-count drawing).  Requesting
+	// that version makes an unsuitable fallback device fail at window creation
+	// instead of much later through a missing function pointer.
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
+	// Textbox still renders through the fixed-function pipeline (glBegin,
+	// glMatrixMode, glOrtho), which is unavailable in a core profile.
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
 	glfwWindowHint(GLFW_DEPTH_BITS, 32); // Request 32-bit depth buffer
 	// glfwWindowHint(GLFW_SAMPLES, 4);
 
-	// Always start in true fullscreen on the primary monitor
+	// On Wayland, a surface created directly in fullscreen has no previous
+	// windowed placement for the compositor to restore.  Create it windowed and
+	// enter fullscreen after its first mapped frame instead.
 	GLFWmonitor *monitor = glfwGetPrimaryMonitor();
 	const GLFWvidmode *mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+	const bool deferFullscreen = glfwGetPlatform() == GLFW_PLATFORM_WAYLAND;
 	if (mode)
 	{
-		windowWidth = mode->width;
-		windowHeight = mode->height;
-		// Match the monitor's color depth and refresh rate for smooth fullscreen
-		glfwWindowHint(GLFW_RED_BITS, mode->redBits);
-		glfwWindowHint(GLFW_GREEN_BITS, mode->greenBits);
-		glfwWindowHint(GLFW_BLUE_BITS, mode->blueBits);
-		glfwWindowHint(GLFW_REFRESH_RATE, mode->refreshRate);
-		_window = glfwCreateWindow(windowWidth, windowHeight, "Not_ft_minecraft | FPS: 0", monitor, NULL);
+		if (deferFullscreen)
+		{
+			windowWidth = std::min(WINDOWED_FIXED_W, mode->width);
+			windowHeight = std::min(WINDOWED_FIXED_H, mode->height);
+			_window = glfwCreateWindow(windowWidth, windowHeight,
+				"Not_ft_minecraft | FPS: 0", nullptr, nullptr);
+		}
+		else
+		{
+			windowWidth = mode->width;
+			windowHeight = mode->height;
+			// Match the monitor's color depth and refresh rate for smooth fullscreen
+			glfwWindowHint(GLFW_RED_BITS, mode->redBits);
+			glfwWindowHint(GLFW_GREEN_BITS, mode->greenBits);
+			glfwWindowHint(GLFW_BLUE_BITS, mode->blueBits);
+			glfwWindowHint(GLFW_REFRESH_RATE, mode->refreshRate);
+			_window = glfwCreateWindow(windowWidth, windowHeight,
+				"Not_ft_minecraft | FPS: 0", monitor, nullptr);
+		}
 	}
 	else
 	{
@@ -3238,6 +3219,7 @@ bool StoneEngine::initGLFW()
 		_mouseCapture.apply(_window, mouseCaptureToggle);
 	}
 	_isFullscreen = (glfwGetWindowMonitor(_window) != nullptr);
+	_deferInitialFullscreen = deferFullscreen && !_isFullscreen;
 	return true;
 }
 
@@ -3245,9 +3227,9 @@ bool StoneEngine::initGLEW()
 {
 	glewExperimental = GL_TRUE;
 	GLenum err = glewInit();
-	// GLFW uses EGL on native Wayland.  GLEW 2.2 initializes the OpenGL entry
-	// points successfully there but returns NO_GLX_DISPLAY because GLX is an
-	// X11-only API that is absent from this context.
+	// GLEW reports NO_GLX_DISPLAY when GLFW uses an EGL/Wayland context.  Its
+	// OpenGL entry points are still initialized in that case; only GLX support
+	// is unavailable, which this program does not use.
 	if (err != GLEW_OK && err != GLEW_ERROR_NO_GLX_DISPLAY)
 	{
 		std::cerr << "GLEW initialization failed (" << err << "): "
@@ -3286,33 +3268,37 @@ void StoneEngine::setFullscreen(bool enable)
 	const GLFWvidmode *mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
 	if (enable && monitor && mode)
 	{
-		// Going fullscreen: remember current windowed placement
-		int w, h;
-		glfwGetWindowSize(_window, &w, &h);
-		_windowedW = w;
-		_windowedH = h;
-		if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND)
-			glfwGetWindowPos(_window, &_windowedX, &_windowedY);
-
 		glfwSetWindowMonitor(_window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
 		_isFullscreen = true;
 	}
 	else
 	{
-		// Going windowed: use fixed size
+		// Center the fixed-size window in the monitor's usable area.  Using the
+		// work area also keeps the title bar clear of desktop panels.
 		int w = WINDOWED_FIXED_W;
 		int h = WINDOWED_FIXED_H;
-		int x = _windowedX, y = _windowedY;
+		int x = 0;
+		int y = 0;
 		if (mode && monitor)
 		{
-			// Center if unknown position
-			if (x <= 0 && y <= 0)
+			int workX = 0;
+			int workY = 0;
+			int workW = 0;
+			int workH = 0;
+
+			glfwGetMonitorWorkarea(monitor, &workX, &workY, &workW, &workH);
+			if (workW <= 0 || workH <= 0)
 			{
-				x = (mode->width - w) / 2;
-				y = (mode->height - h) / 2;
+				glfwGetMonitorPos(monitor, &workX, &workY);
+				workW = mode->width;
+				workH = mode->height;
 			}
+			w = std::min(w, workW);
+			h = std::min(h, workH);
+			x = workX + (workW - w) / 2;
+			y = workY + (workH - h) / 2;
 		}
-		// Ensure window decorations and non-maximized state when leaving fullscreen
+
 		glfwSetWindowMonitor(_window, nullptr, x, y, w, h, 0);
 		glfwSetWindowAttrib(_window, GLFW_DECORATED, GLFW_TRUE);
 		glfwRestoreWindow(_window);
